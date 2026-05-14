@@ -34,7 +34,10 @@ exports.getContacts = async (req, res, next) => {
 
     const [contacts, total] = await Promise.all([
       Contact.find(query)
-        .populate("prospect", "status priority estimatedValue assignedToName followUpDate")
+        .populate(
+          "prospectId",
+          "status priority estimatedValue assignedToName followUpDate",
+        )
         .sort({ [sortBy]: sortOrder })
         .skip(skip)
         .limit(Number(limit)),
@@ -61,15 +64,24 @@ exports.getContact = async (req, res, next) => {
       .populate("createdBy", "name devID")
       .populate("updatedBy", "name devID")
       .populate({
-        path: "prospect",
-        populate: { path: "assignedTo", select: "name devID" },
+        path: "prospectId",
+        populate: {
+          path: "assignedTo",
+          select: "name devID",
+        },
       });
 
     if (!contact) {
-      return res.status(404).json({ success: false, message: "Contact not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Contact not found",
+      });
     }
 
-    res.json({ success: true, data: contact });
+    res.json({
+      success: true,
+      data: contact,
+    });
   } catch (err) {
     next(err);
   }
@@ -84,7 +96,10 @@ exports.createContact = async (req, res, next) => {
       createdByName: req.user.name,
     });
 
-    res.status(201).json({ success: true, data: contact });
+    res.status(201).json({
+      success: true,
+      data: contact,
+    });
   } catch (err) {
     next(err);
   }
@@ -93,9 +108,9 @@ exports.createContact = async (req, res, next) => {
 // ── PUT /api/contacts/:id ─────────────────────────────────────────────────────
 exports.updateContact = async (req, res, next) => {
   try {
-    // Prevent directly toggling isProspect through this route
+    // Prevent directly toggling prospect state through this route
     delete req.body.isProspect;
-    delete req.body.prospect;
+    delete req.body.prospectId;
     delete req.body.createdBy;
     delete req.body.createdByName;
 
@@ -106,14 +121,23 @@ exports.updateContact = async (req, res, next) => {
         updatedBy: req.user._id,
         updatedByName: req.user.name,
       },
-      { new: true, runValidators: true }
+      {
+        new: true,
+        runValidators: true,
+      },
     );
 
     if (!contact) {
-      return res.status(404).json({ success: false, message: "Contact not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Contact not found",
+      });
     }
 
-    res.json({ success: true, data: contact });
+    res.json({
+      success: true,
+      data: contact,
+    });
   } catch (err) {
     next(err);
   }
@@ -125,29 +149,39 @@ exports.deleteContact = async (req, res, next) => {
     const contact = await Contact.findById(req.params.id);
 
     if (!contact) {
-      return res.status(404).json({ success: false, message: "Contact not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Contact not found",
+      });
     }
 
     // Cascade delete linked prospect if it exists
-    if (contact.prospect) {
-      await Prospect.findByIdAndDelete(contact.prospect);
+    if (contact.prospectId) {
+      await Prospect.findByIdAndDelete(contact.prospectId);
     }
 
     await contact.deleteOne();
 
-    res.json({ success: true, message: "Contact deleted successfully" });
+    res.json({
+      success: true,
+      message: "Contact deleted successfully",
+    });
   } catch (err) {
     next(err);
   }
 };
 
 // ── PATCH /api/contacts/:id/mark-prospect ────────────────────────────────────
-//    Marks a contact as a prospect (or updates prospect details)
+// Marks a contact as a prospect (or updates prospect details)
 exports.markAsProspect = async (req, res, next) => {
   try {
     const contact = await Contact.findById(req.params.id);
+
     if (!contact) {
-      return res.status(404).json({ success: false, message: "Contact not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Contact not found",
+      });
     }
 
     const {
@@ -167,11 +201,15 @@ exports.markAsProspect = async (req, res, next) => {
     let prospect;
     let isNewProspect = false;
 
-    if (contact.isProspect && contact.prospect) {
-      // ── Already a prospect → update ─────────────────────────────
-      prospect = await Prospect.findById(contact.prospect);
+    // ── Existing prospect ─────────────────────────────────────────
+    if (contact.isProspect && contact.prospectId) {
+      prospect = await Prospect.findById(contact.prospectId);
+
       if (!prospect) {
-        return res.status(404).json({ success: false, message: "Linked prospect record not found" });
+        return res.status(404).json({
+          success: false,
+          message: "Linked prospect record not found",
+        });
       }
 
       const oldStatus = prospect.status;
@@ -192,59 +230,81 @@ exports.markAsProspect = async (req, res, next) => {
         updatedByName: req.user.name,
       });
 
-      // Handle won/lost close date
+      // Set won/lost timestamp
       if (status === "won" || status === "lost") {
         prospect.wonLostDate = new Date();
       }
 
-      // Log activity if status changed
+      // Activity log + notification on status change
       if (status && status !== oldStatus) {
         prospect.activities.push({
           action: "status_changed",
           description: `Status changed from '${oldStatus}' to '${status}'`,
           performedBy: req.user._id,
           performedByName: req.user.name,
-          meta: { from: oldStatus, to: status },
+          meta: {
+            from: oldStatus,
+            to: status,
+          },
         });
 
-        // Broadcast status change notification
         const notification = await Notification.create({
-          type: status === "won" ? "prospect_won" : status === "lost" ? "prospect_lost" : "prospect_status_changed",
-          title: status === "won" ? "🎉 Prospect Won!" : `Prospect Status Updated`,
-          message: `${req.user.name} updated ${contact.name}'s prospect status to '${status}'`,
-          prospect: prospect._id,
+          type:
+            status === "won"
+              ? "prospect_won"
+              : status === "lost"
+                ? "prospect_lost"
+                : "prospect_status_changed",
+
+          title:
+            status === "won" ? "🎉 Prospect Won!" : "Prospect Status Updated",
+
+          message: `${req.user.name} updated ${contact.fullName}'s prospect status to '${status}'`,
+
+          prospectId: prospect._id,
           contact: contact._id,
+
           triggeredBy: req.user._id,
           triggeredByName: req.user.name,
         });
 
         socket.broadcastToAll("notification", {
           ...notification.toObject(),
-          contactName: contact.name,
+          contactName: contact.fullName,
           company: contact.company,
         });
       }
 
       await prospect.save();
-    } else {
-      // ── New prospect ──────────────────────────────────────────────
+    }
+
+    // ── New prospect ──────────────────────────────────────────────
+    else {
       isNewProspect = true;
 
       prospect = await Prospect.create({
         contact: contact._id,
+
         status: status || "new",
         priority: priority || "medium",
+
         estimatedValue: estimatedValue || 0,
         currency: currency || "INR",
+
         expectedCloseDate,
         followUpDate,
+
         assignedTo,
         assignedToName,
+
         source: source || "other",
+
         remarks,
         interestedIn,
+
         markedProspectBy: req.user._id,
         markedProspectByName: req.user.name,
+
         activities: [
           {
             action: "created",
@@ -255,39 +315,51 @@ exports.markAsProspect = async (req, res, next) => {
         ],
       });
 
-      // Update contact flags
+      // Link prospect to contact
       contact.isProspect = true;
-      contact.prospect = prospect._id;
+      contact.prospectId = prospect._id;
+
       contact.updatedBy = req.user._id;
       contact.updatedByName = req.user.name;
+
       await contact.save();
 
-      // ── Real-time broadcast to all portal users ───────────────────
+      // Broadcast notification
       const notification = await Notification.create({
         type: "prospect_added",
+
         title: "New Prospect Added",
-        message: `${req.user.name} marked ${contact.name}${contact.company ? ` (${contact.company})` : ""} as a prospect`,
-        prospect: prospect._id,
+
+        message: `${req.user.name} marked ${contact.fullName}${
+          contact.company ? ` (${contact.company})` : ""
+        } as a prospect`,
+
+        prospectId: prospect._id,
         contact: contact._id,
+
         triggeredBy: req.user._id,
         triggeredByName: req.user.name,
       });
 
       socket.broadcastToAll("notification", {
         ...notification.toObject(),
-        contactName: contact.name,
+        contactName: contact.fullName,
         company: contact.company,
         prospectStatus: prospect.status,
         priority: prospect.priority,
       });
     }
 
-    // Populate and return full contact
-    const updatedContact = await Contact.findById(contact._id).populate("prospect");
+    // Return updated contact with populated prospect
+    const updatedContact = await Contact.findById(contact._id).populate(
+      "prospectId",
+    );
 
     res.json({
       success: true,
-      message: isNewProspect ? "Contact successfully marked as prospect" : "Prospect updated",
+      message: isNewProspect
+        ? "Contact successfully marked as prospect"
+        : "Prospect updated",
       data: updatedContact,
     });
   } catch (err) {
@@ -295,29 +367,44 @@ exports.markAsProspect = async (req, res, next) => {
   }
 };
 
-// ── PATCH /api/contacts/:id/unmark-prospect ───────────────────────────────────
+// ── PATCH /api/contacts/:id/unmark-prospect ──────────────────────────────────
 exports.unmarkProspect = async (req, res, next) => {
   try {
     const contact = await Contact.findById(req.params.id);
+
     if (!contact) {
-      return res.status(404).json({ success: false, message: "Contact not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Contact not found",
+      });
     }
 
     if (!contact.isProspect) {
-      return res.status(400).json({ success: false, message: "Contact is not a prospect" });
+      return res.status(400).json({
+        success: false,
+        message: "Contact is not a prospect",
+      });
     }
 
-    if (contact.prospect) {
-      await Prospect.findByIdAndDelete(contact.prospect);
+    // Delete linked prospect record
+    if (contact.prospectId) {
+      await Prospect.findByIdAndDelete(contact.prospectId);
     }
 
+    // Reset contact fields
     contact.isProspect = false;
-    contact.prospect = null;
+    contact.prospectId = null;
+
     contact.updatedBy = req.user._id;
     contact.updatedByName = req.user.name;
+
     await contact.save();
 
-    res.json({ success: true, message: "Contact unmarked as prospect", data: contact });
+    res.json({
+      success: true,
+      message: "Contact unmarked as prospect",
+      data: contact,
+    });
   } catch (err) {
     next(err);
   }

@@ -20,7 +20,7 @@ router
   .route("/:id")
   .get(getContact)
   .put(updateContact)
-  .delete(authorise("admin"), deleteContact);
+  .delete(restrictTo("admin"), deleteContact);
 
 // Prospect actions on a contact
 router.patch("/:id/mark-prospect", markAsProspect);
